@@ -4,16 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>足球赔率分析可视化系统</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260420b" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
     <div class="app-shell">
         <aside class="sidebar">
             <div class="brand-card">
-                <div class="eyebrow">纯免费版 · 博彩公司赔率</div>
+                <div class="eyebrow">免费版 · 网页抓取赔率</div>
                 <h1>足球赔率分析可视化系统</h1>
-                <p>基于 API-Football 的真实比赛、比分、红黄牌和博彩公司胜平负盘口，输出辅助下注建议。</p>
+                <p>基于 BetExplorer 网页抓取的胜平负盘口，输出比赛列表、赔率结构和辅助下注建议。</p>
                 <div class="status-strip">
                     <span id="providerBadge" class="pill">盘口源：--</span>
                     <span id="liveBadge" class="pill ghost">比分源：--</span>
@@ -34,13 +34,13 @@
             <section class="hero-panel">
                 <div class="hero-copy">
                     <div id="marketStatus" class="eyebrow">等待数据</div>
-                    <h2 id="eventTitle">当前没有可展示的比赛</h2>
-                    <p id="eventMeta">请先配置免费 API key，然后刷新页面。</p>
+                    <h2 id="eventTitle">正在加载比赛数据</h2>
+                    <p id="eventMeta">系统会优先显示当前抓取到的可分析比赛。</p>
 
                     <div class="recommendation-card">
-                        <div class="recommendation-label">辅助下注建议</div>
+                        <div class="recommendation-label">下注建议</div>
                         <div id="recommendationAction" class="recommendation-action">等待数据</div>
-                        <div id="recommendationSelection" class="recommendation-selection">暂无建议方向</div>
+                        <div id="recommendationSelection" class="recommendation-selection">尚未选择方向</div>
                         <div class="recommendation-metrics">
                             <div>
                                 <span>评分</span>
@@ -57,7 +57,7 @@
 
                 <div class="scoreboard-card">
                     <div class="scoreboard-top">
-                        <span id="scoreStatus" class="score-status">暂无实时比分</span>
+                        <span id="scoreStatus" class="score-status">当前没有实时比分</span>
                         <span id="scoreProvider" class="pill ghost">比分源：--</span>
                     </div>
                     <div class="scoreboard-main">
@@ -79,11 +79,11 @@
 
             <section class="metrics-grid">
                 <article class="metric-card">
-                    <span>博彩公司数</span>
+                    <span>书商数</span>
                     <strong id="metricBookmakers">--</strong>
                 </article>
                 <article class="metric-card">
-                    <span>超额率</span>
+                    <span>超额利润</span>
                     <strong id="metricOverround">--</strong>
                 </article>
                 <article class="metric-card">
@@ -91,11 +91,11 @@
                     <strong id="metricSpread">--</strong>
                 </article>
                 <article class="metric-card">
-                    <span>市场信号</span>
+                    <span>信号</span>
                     <strong id="metricSignal">--</strong>
                 </article>
                 <article class="metric-card">
-                    <span>比赛分钟</span>
+                    <span>比分时间</span>
                     <strong id="metricLive">--</strong>
                 </article>
                 <article class="metric-card">
@@ -107,15 +107,15 @@
             <section class="grid-two">
                 <article class="panel">
                     <div class="panel-head">
-                        <h3>赔率走势图</h3>
+                        <h3>赔率走势</h3>
                         <span id="oddsCaption">等待赔率数据</span>
                     </div>
                     <div id="oddsChart" class="chart"></div>
                 </article>
                 <article class="panel">
                     <div class="panel-head">
-                        <h3>隐含概率走势</h3>
-                        <span id="probabilityCaption">按赔率换算</span>
+                        <h3>隐含概率</h3>
+                        <span id="probabilityCaption">等待概率数据</span>
                     </div>
                     <div id="probabilityChart" class="chart"></div>
                 </article>
@@ -124,8 +124,8 @@
             <section class="grid-two">
                 <article class="panel">
                     <div class="panel-head">
-                        <h3>博彩公司盘口</h3>
-                        <span>主胜 / 平 / 客胜</span>
+                        <h3>书商盘口</h3>
+                        <span>主胜 / 平局 / 客胜</span>
                     </div>
                     <div id="bookmakerPanel" class="bookmaker-panel"></div>
                 </article>
@@ -140,16 +140,16 @@
 
             <section class="panel">
                 <div class="panel-head">
-                    <h3>信号面板</h3>
-                    <span>赔率变化 / 盘口分歧 / 比赛事件</span>
+                    <h3>信号说明</h3>
+                    <span>赔率结构 / 盘口分歧 / 风险提示</span>
                 </div>
                 <div id="signalPanel" class="signal-panel"></div>
             </section>
 
             <section class="panel">
                 <div class="panel-head">
-                    <h3>多场监控</h3>
-                    <span>真实比赛列表</span>
+                    <h3>监控列表</h3>
+                    <span>当前抓取到的比赛</span>
                 </div>
                 <div class="table-wrap">
                     <table class="monitor-table">
@@ -157,9 +157,9 @@
                             <tr>
                                 <th>比赛</th>
                                 <th>比分</th>
-                                <th>分钟</th>
-                                <th>博彩公司</th>
-                                <th>盘口分歧</th>
+                                <th>时间</th>
+                                <th>书商</th>
+                                <th>分歧</th>
                                 <th>信号</th>
                                 <th>评分</th>
                                 <th>更新时间</th>
@@ -169,13 +169,13 @@
                     </table>
                 </div>
                 <div class="footer-note">
-                    <span>最近更新时间：</span>
+                    <span>最新刷新时间：</span>
                     <strong id="metricUpdated">--</strong>
                 </div>
             </section>
         </main>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260420b"></script>
 </body>
 </html>

@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import random
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from statistics import mean
 from typing import Any
+from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
 
 import httpx
+from bs4 import BeautifulSoup
 
 from ..config import Settings
 
@@ -182,7 +186,10 @@ class DemoMarketProvider(MarketProvider):
     async def discover_markets(self) -> list[MarketQuote]:
         await asyncio.sleep(0)
         quotes = [self._update_market(item) for item in self._markets.values()]
-        quotes.sort(key=lambda item: (not item.in_play, item.start_time))
+        quotes.sort(key=lambda item: (item.status == "FT", not item.in_play, item.start_time))
+        active_quotes = [item for item in quotes if item.status != "FT"]
+        if active_quotes:
+            return active_quotes[: self.settings.tracked_markets_limit]
         return quotes[: self.settings.tracked_markets_limit]
 
     async def fetch_market_books(self, market_ids: list[str]) -> list[MarketQuote]:
@@ -198,6 +205,178 @@ class DemoMarketProvider(MarketProvider):
             "last_error": None,
             "ready": True,
         }
+
+
+class BetExplorerScrapeProvider(MarketProvider):
+    provider_name = "betexplorer_scrape"
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.client = httpx.AsyncClient(
+            base_url="https://www.betexplorer.com",
+            timeout=20,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/135.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            follow_redirects=True,
+        )
+        self.last_error: str | None = None
+        try:
+            self.local_timezone = ZoneInfo(self.settings.api_football_timezone)
+        except ZoneInfoNotFoundError:
+            self.local_timezone = timezone(timedelta(hours=9))
+
+    async def discover_markets(self) -> list[MarketQuote]:
+        try:
+            quotes = await self._fetch_market_quotes()
+            self.last_error = None
+            return quotes
+        except Exception as exc:
+            self.last_error = str(exc)
+            raise
+
+    async def fetch_market_books(self, market_ids: list[str]) -> list[MarketQuote]:
+        try:
+            quotes = await self._fetch_market_quotes()
+            if not market_ids:
+                self.last_error = None
+                return quotes
+
+            wanted = set(market_ids)
+            filtered = [quote for quote in quotes if quote.market_id in wanted]
+            self.last_error = None
+            return filtered or quotes
+        except Exception as exc:
+            self.last_error = str(exc)
+            raise
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "active_provider": self.provider_name,
+            "fallback_active": False,
+            "last_error": self.last_error,
+            "ready": True,
+        }
+
+    async def _fetch_market_quotes(self) -> list[MarketQuote]:
+        quotes = await self._fetch_listing_quotes("/football/results/")
+        if quotes:
+            return quotes
+        return await self._fetch_listing_quotes("/football/")
+
+    async def _fetch_listing_quotes(self, path: str) -> list[MarketQuote]:
+        response = await self.client.get(path)
+        response.raise_for_status()
+        return self._parse_listing_page(response.text, path)
+
+    def _parse_listing_page(self, html: str, source_path: str) -> list[MarketQuote]:
+        soup = BeautifulSoup(html, "lxml")
+        table = soup.find("table", class_="table-main")
+        if table is None:
+            raise RuntimeError(f"BetExplorer listing table was not found for {source_path}.")
+
+        now = datetime.now(UTC)
+        page_now_local, page_timezone = _extract_betexplorer_page_clock(soup, now, self.local_timezone)
+        current_tournament = ""
+        quotes: list[MarketQuote] = []
+
+        for row in table.find_all("tr"):
+            row_classes = set(row.get("class") or [])
+            if "js-tournament" in row_classes:
+                tournament_link = row.find("a", class_="table-main__tournament")
+                if tournament_link:
+                    current_tournament = " ".join(tournament_link.get_text(" ", strip=True).split())
+                continue
+
+            cells = row.find_all("td")
+            if len(cells) < 5:
+                continue
+            if not all(cell.find("button") for cell in cells[2:5]):
+                continue
+
+            link = cells[0].find("a", href=True)
+            if link is None:
+                continue
+
+            match_name = " ".join(link.get_text(" ", strip=True).split())
+            home_name, away_name = _split_match_name(match_name)
+            match_href = str(link["href"])
+            match_id = match_href.rstrip("/").split("/")[-1]
+            start_local = _parse_betexplorer_local_datetime(row.get("data-dt"))
+            if start_local is None:
+                continue
+
+            start_time = start_local.replace(tzinfo=page_timezone).astimezone(UTC)
+            status, in_play = _infer_scrape_status(start_local, page_now_local)
+
+            home_runner = _runner_from_scrape_cell(1, home_name, "home", cells[2])
+            draw_runner = _runner_from_scrape_cell(2, "Draw", "draw", cells[3])
+            away_runner = _runner_from_scrape_cell(3, away_name, "away", cells[4])
+            runners = [home_runner, draw_runner, away_runner]
+
+            if not all(runner.price for runner in runners):
+                continue
+
+            overround = round(sum((1 / runner.price) for runner in runners if runner.price), 4)
+            summary_row = {
+                "name": "BetExplorer",
+                "home": round(home_runner.price or 0.0, 2),
+                "draw": round(draw_runner.price or 0.0, 2),
+                "away": round(away_runner.price or 0.0, 2),
+            }
+
+            quotes.append(
+                MarketQuote(
+                    market_id=f"betexplorer-{match_id}",
+                    event_id=match_id,
+                    event_name=f"{home_name} vs {away_name}",
+                    market_name="Match Winner",
+                    home_name=home_name,
+                    away_name=away_name,
+                    provider=self.provider_name,
+                    start_time=start_time,
+                    status=status,
+                    in_play=in_play,
+                    total_matched=None,
+                    updated_at=now,
+                    runners=runners,
+                    extra={
+                        "fixture_id": match_id,
+                        "league_name": current_tournament,
+                        "match_url": urljoin(str(self.client.base_url), match_href),
+                        "source_page": urljoin(str(self.client.base_url), source_path),
+                        "bookmaker_count": 1,
+                        "bookmakers": [summary_row],
+                        "overround": overround,
+                        "market_type": "胜平负",
+                        "odds_scope": "网页抓取",
+                    },
+                )
+            )
+
+        active_quotes = [
+            item
+            for item in quotes
+            if item.status in ACTIVE_STATUSES
+            and item.start_time <= now + timedelta(hours=self.settings.market_window_hours)
+        ]
+        if self.settings.normalized_live_score_mode == "off":
+            active_quotes.sort(key=lambda item: (item.in_play, item.start_time, item.event_name))
+        else:
+            active_quotes.sort(key=lambda item: (not item.in_play, item.start_time, item.event_name))
+        if active_quotes:
+            return active_quotes[: self.settings.tracked_markets_limit]
+
+        quotes.sort(key=lambda item: (item.status == "FT", not item.in_play, item.start_time))
+        return quotes[: self.settings.tracked_markets_limit]
 
 
 class ApiFootballOddsProvider(MarketProvider):
@@ -605,6 +784,8 @@ def build_provider(settings: Settings) -> MarketProvider:
 
     if mode == "demo":
         return demo
+    if mode == "betexplorer_scrape":
+        return BetExplorerScrapeProvider(settings)
     if mode == "api_football_odds":
         if settings.api_football_ready:
             return ApiFootballOddsProvider(settings)
@@ -719,11 +900,93 @@ def _runner_from_bookmakers(
     )
 
 
+def _runner_from_scrape_cell(
+    selection_id: int,
+    label: str,
+    outcome_key: str,
+    cell: Any,
+) -> RunnerQuote:
+    button = cell.find("button") if cell else None
+    current_price = _safe_float(button.get("data-odd") if button else None)
+    best_price = _safe_float(button.get("data-odd-max") if button else None) or current_price
+    display_price = best_price or current_price
+    width = abs((best_price or 0.0) - (current_price or best_price or 0.0))
+    bookmaker_price = display_price
+
+    return RunnerQuote(
+        selection_id=selection_id,
+        name=label,
+        price=round(display_price, 3) if display_price is not None else None,
+        implied_probability=round(1 / display_price, 4) if display_price else None,
+        bookmaker_count=1 if display_price else 0,
+        best_price=round(best_price, 3) if best_price is not None else None,
+        worst_price=round(current_price or best_price or 0.0, 3) if display_price is not None else None,
+        market_width=round(width, 3) if display_price is not None else 0.0,
+        bookmakers=(
+            [{"name": "BetExplorer", "price": round(bookmaker_price, 3)}]
+            if bookmaker_price is not None
+            else []
+        ),
+    )
+
+
 def _favorite_name(runners: list[RunnerQuote]) -> str:
     candidates = [runner for runner in runners if runner.price]
     if not candidates:
         return ""
     return min(candidates, key=lambda item: item.price or 999.0).name
+
+
+def _split_match_name(raw_value: str) -> tuple[str, str]:
+    parts = [part.strip() for part in raw_value.split(" - ", 1)]
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return raw_value.strip(), "Away"
+
+
+def _parse_betexplorer_local_datetime(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+
+    try:
+        day, month, year, hour, minute = [int(part) for part in raw_value.split(",")]
+    except ValueError:
+        return None
+
+    return datetime(year, month, day, hour, minute)
+
+
+def _extract_betexplorer_page_clock(
+    soup: BeautifulSoup,
+    now_utc: datetime,
+    fallback_timezone: timezone | ZoneInfo,
+) -> tuple[datetime, timezone | ZoneInfo]:
+    row = soup.find("tr", attrs={"data-dt-now": True})
+    page_now_local = _parse_betexplorer_local_datetime(row.get("data-dt-now")) if row else None
+    if page_now_local is None:
+        fallback_now = now_utc.astimezone(fallback_timezone)
+        return fallback_now.replace(tzinfo=None), fallback_timezone
+
+    offset_minutes = _infer_fixed_offset_minutes(page_now_local, now_utc)
+    page_timezone = timezone(timedelta(minutes=offset_minutes))
+    return page_now_local, page_timezone
+
+
+def _infer_fixed_offset_minutes(page_now_local: datetime, now_utc: datetime) -> int:
+    diff_minutes = int(round((page_now_local - now_utc.replace(tzinfo=None)).total_seconds() / 60))
+    while diff_minutes <= -720:
+        diff_minutes += 1440
+    while diff_minutes > 840:
+        diff_minutes -= 1440
+    return int(round(diff_minutes / 15) * 15)
+
+
+def _infer_scrape_status(start_time: datetime, page_now_local: datetime) -> tuple[str, bool]:
+    if start_time <= page_now_local <= start_time + timedelta(hours=2, minutes=15):
+        return "LIVE", True
+    if page_now_local > start_time + timedelta(hours=2, minutes=15):
+        return "FT", False
+    return "NS", False
 
 
 def _normalise_outcome_label(raw_value: Any, home_name: str, away_name: str) -> str | None:

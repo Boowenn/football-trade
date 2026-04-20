@@ -30,6 +30,7 @@ const PROVIDER_NAME_MAP = {
   demo: "演示赔率",
   api_football_odds: "API-Football 赔率",
   api_football: "API-Football 比分",
+  betexplorer_scrape: "BetExplorer 抓取",
   "demo-live": "演示比分",
   auto: "自动",
   "auto-live": "自动",
@@ -41,6 +42,7 @@ const MODE_NAME_MAP = {
   demo: "演示模式",
   api_football_odds: "免费真实版",
   api_football: "免费真实版",
+  betexplorer_scrape: "网页抓取",
   auto: "自动模式",
 };
 
@@ -141,8 +143,11 @@ const elements = {
   probabilityCaption: document.getElementById("probabilityCaption"),
 };
 
-const oddsChart = echarts.init(document.getElementById("oddsChart"));
-const probabilityChart = echarts.init(document.getElementById("probabilityChart"));
+const oddsChartElement = document.getElementById("oddsChart");
+const probabilityChartElement = document.getElementById("probabilityChart");
+const chartsEnabled = typeof window !== "undefined" && typeof window.echarts !== "undefined";
+const oddsChart = chartsEnabled && oddsChartElement ? echarts.init(oddsChartElement) : null;
+const probabilityChart = chartsEnabled && probabilityChartElement ? echarts.init(probabilityChartElement) : null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -266,11 +271,21 @@ function usesDemoFallback(system) {
   );
 }
 
+function needsApiFootballKey(system) {
+  if (!system) return false;
+  return (
+    system.configured_mode === "api_football_odds" ||
+    system.live_score_configured_mode === "api_football" ||
+    system.active_provider === "api_football_odds" ||
+    system.active_live_score_provider === "api_football"
+  );
+}
+
 function primarySystemMessage(system) {
   if (!system) {
     return "当前没有真实比赛数据。";
   }
-  if (!system.api_football_ready) {
+  if (needsApiFootballKey(system) && !system.api_football_ready) {
     if (usesDemoFallback(system)) {
       return "未配置 API_FOOTBALL_KEY，当前展示的是演示赔率和演示比分。填入免费 key 后会自动切到真实数据。";
     }
@@ -285,7 +300,7 @@ function buildSystemNotice(system) {
   }
 
   const lines = [];
-  if (!system.api_football_ready) {
+  if (needsApiFootballKey(system) && !system.api_football_ready) {
     if (usesDemoFallback(system)) {
       lines.push("缺少 API_FOOTBALL_KEY，当前已回退到演示数据。");
       lines.push("在 D:\\football\\.env 里填入免费 key 后会自动切到真实盘口和真实比分。");
@@ -293,6 +308,12 @@ function buildSystemNotice(system) {
       lines.push("缺少 API_FOOTBALL_KEY。");
       lines.push("请先在 D:\\football\\.env 里填入免费 key。");
     }
+  }
+  if (system.active_provider === "betexplorer_scrape") {
+    lines.push("当前赔率来自 BetExplorer 网页抓取，可能存在延迟、缺失或页面结构变动。");
+  }
+  if (system.active_live_score_provider === "off") {
+    lines.push("当前未接入实时比分抓取。");
   }
   if (system.last_error) {
     lines.push(localizeText(system.last_error));
@@ -388,6 +409,12 @@ function renderMonitorTable() {
 }
 
 function renderEmptyCharts(message) {
+  if (!oddsChart || !probabilityChart) {
+    renderChartFallback(oddsChartElement, message);
+    renderChartFallback(probabilityChartElement, message);
+    return;
+  }
+
   const option = {
     backgroundColor: "transparent",
     title: {
@@ -406,6 +433,11 @@ function renderEmptyCharts(message) {
   };
   oddsChart.setOption(option, true);
   probabilityChart.setOption(option, true);
+}
+
+function renderChartFallback(container, message) {
+  if (!container) return;
+  container.innerHTML = `<div class="empty-block">${escapeHtml(message)}</div>`;
 }
 
 function renderEmptyDashboard() {
@@ -432,7 +464,9 @@ function renderEmptyDashboard() {
   elements.recommendationReasons.innerHTML = `
     <li>${escapeHtml(systemMessage)}</li>
     <li>${
-      usesDemoFallback(state.system)
+      !needsApiFootballKey(state.system)
+        ? "当前模式不依赖 API key；若网页结构变化导致抓取失败，需要重新适配抓取规则。"
+        : usesDemoFallback(state.system)
         ? "当前仍可查看演示数据；填入免费 key 后会切换到真实比赛、真实比分和真实赔率。"
         : "免费版需要 API_FOOTBALL_KEY 才能抓取真实比赛和赔率。"
     }</li>
@@ -472,10 +506,10 @@ async function refreshMatches() {
   renderSystem(system);
 
   if (!state.selectedMarketId && matches.length) {
-    state.selectedMarketId = matches[0].market_id;
+    state.selectedMarketId = pickDefaultMarketId(matches);
   }
   if (state.selectedMarketId && !matches.some((match) => match.market_id === state.selectedMarketId)) {
-    state.selectedMarketId = matches.length ? matches[0].market_id : null;
+    state.selectedMarketId = matches.length ? pickDefaultMarketId(matches) : null;
   }
 
   renderMatchList();
@@ -487,6 +521,14 @@ async function refreshMatches() {
   }
 
   await loadSelectedMarket();
+}
+
+function pickDefaultMarketId(matches) {
+  const preferred =
+    matches.find((match) => (match.confidence || 0) >= 58 && match.signal !== "neutral") ||
+    matches.find((match) => (match.confidence || 0) >= 58) ||
+    matches[0];
+  return preferred?.market_id || null;
 }
 
 async function selectMarket(marketId) {
@@ -635,6 +677,12 @@ function renderBookmakers(bookmakers) {
 }
 
 function renderOddsChart(snapshot, timeseries) {
+  if (!oddsChart) {
+    renderChartFallback(oddsChartElement, "图表组件未加载，已跳过走势渲染");
+    elements.oddsCaption.textContent = "图表组件未加载";
+    return;
+  }
+
   const runnerMap = new Map();
   (snapshot.runners || []).forEach((runner) => {
     runnerMap.set(runner.selection_id, {
@@ -690,6 +738,12 @@ function renderOddsChart(snapshot, timeseries) {
 }
 
 function renderProbabilityChart(snapshot, timeseries) {
+  if (!probabilityChart) {
+    renderChartFallback(probabilityChartElement, "图表组件未加载，已跳过概率渲染");
+    elements.probabilityCaption.textContent = "图表组件未加载";
+    return;
+  }
+
   const runnerMap = new Map();
   (snapshot.runners || []).forEach((runner) => {
     runnerMap.set(runner.selection_id, {
@@ -756,10 +810,10 @@ function initSocket() {
     renderMonitorTable();
 
     if (!state.selectedMarketId && state.matches.length) {
-      state.selectedMarketId = state.matches[0].market_id;
+      state.selectedMarketId = pickDefaultMarketId(state.matches);
     }
     if (state.selectedMarketId && !state.matches.some((match) => match.market_id === state.selectedMarketId)) {
-      state.selectedMarketId = state.matches.length ? state.matches[0].market_id : null;
+      state.selectedMarketId = state.matches.length ? pickDefaultMarketId(state.matches) : null;
     }
 
     if (state.selectedMarketId) {
@@ -777,6 +831,9 @@ function initSocket() {
 
 async function bootstrap() {
   try {
+    if (!chartsEnabled) {
+      console.warn("ECharts failed to load; rendering without charts.");
+    }
     await refreshMatches();
     initSocket();
   } catch (error) {
@@ -791,8 +848,8 @@ elements.refreshButton.addEventListener("click", async () => {
 });
 
 window.addEventListener("resize", () => {
-  oddsChart.resize();
-  probabilityChart.resize();
+  if (oddsChart) oddsChart.resize();
+  if (probabilityChart) probabilityChart.resize();
 });
 
 bootstrap();

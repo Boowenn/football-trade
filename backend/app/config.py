@@ -9,7 +9,10 @@ DATA_MODE_ALIASES = {
     "api-football": "api_football_odds",
     "api_football": "api_football_odds",
     "betfair": "auto",
+    "crawler": "betexplorer_scrape",
     "free": "auto",
+    "scrape": "betexplorer_scrape",
+    "scraper": "betexplorer_scrape",
 }
 
 LIVE_SCORE_MODE_ALIASES = {
@@ -23,7 +26,7 @@ LIVE_SCORE_MODE_ALIASES = {
 class Settings(BaseSettings):
     app_name: str = "足球赔率分析可视化系统"
     app_host: str = "127.0.0.1"
-    app_port: int = 8000
+    app_port: int = 5001
     database_url: str = "sqlite:///./football.db"
 
     data_mode: str = "auto"

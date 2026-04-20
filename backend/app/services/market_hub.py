@@ -325,7 +325,7 @@ class MarketHub:
                     "live_score": live_score,
                 }
             )
-        rows.sort(key=lambda item: (not item["in_play"], item["start_time"]))
+        rows.sort(key=_match_sort_key)
         return rows
 
     def get_snapshot(self, market_id: str) -> dict[str, Any] | None:
@@ -373,3 +373,14 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     return value
+
+
+def _match_sort_key(item: dict[str, Any]) -> tuple[int, datetime]:
+    live_score = item.get("live_score") or {}
+    if item.get("in_play") and live_score.get("matched"):
+        priority = 0
+    elif not item.get("in_play"):
+        priority = 1
+    else:
+        priority = 2
+    return priority, item["start_time"]

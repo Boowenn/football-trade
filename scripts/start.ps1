@@ -5,6 +5,30 @@ Set-Location $root
 
 $venvPath = Join-Path $root ".venv"
 $pythonExe = Join-Path $venvPath "Scripts\python.exe"
+$envPath = Join-Path $root ".env"
+
+function Get-AppPort {
+    param(
+        [string]$Path
+    )
+
+    $defaultPort = 5001
+    if (-not (Test-Path $Path)) {
+        return $defaultPort
+    }
+
+    $line = Get-Content $Path | Where-Object { $_ -match '^APP_PORT=' } | Select-Object -First 1
+    if (-not $line) {
+        return $defaultPort
+    }
+
+    $value = ($line -split '=', 2)[1].Trim()
+    if ($value -match '^\d+$') {
+        return [int]$value
+    }
+
+    return $defaultPort
+}
 
 function Resolve-BootstrapPython {
     if (Test-Path $pythonExe) {
@@ -37,8 +61,8 @@ try {
         }
     }
 
-    if (-not (Test-Path (Join-Path $root ".env"))) {
-        Copy-Item (Join-Path $root ".env.example") (Join-Path $root ".env")
+    if (-not (Test-Path $envPath)) {
+        Copy-Item (Join-Path $root ".env.example") $envPath
         Write-Host ">>> Created .env from template"
     }
 
@@ -46,9 +70,10 @@ try {
     & $pythonExe -m pip install --upgrade pip
     & $pythonExe -m pip install -r (Join-Path $root "requirements.txt")
 
-    Write-Host ">>> Starting server on http://127.0.0.1:8000"
-    Start-Process "http://127.0.0.1:8000"
-    & $pythonExe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+    $appPort = Get-AppPort -Path $envPath
+    Write-Host ">>> Starting server on http://127.0.0.1:$appPort"
+    Start-Process "http://127.0.0.1:$appPort"
+    & $pythonExe -m uvicorn backend.app.main:app --host 127.0.0.1 --port $appPort
 }
 catch {
     Write-Host ""

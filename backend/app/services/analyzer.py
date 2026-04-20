@@ -22,20 +22,9 @@ def build_recommendation(snapshot: dict, history: Sequence[dict]) -> dict:
     signals: list[dict] = []
 
     if not historical:
-        return {
-            "market_id": snapshot["market_id"],
-            "recommendation": "不下注",
-            "selection_name": "",
-            "market_label": "胜平负",
-            "score": 0.0,
-            "confidence_label": "不下注",
-            "risk_level": "High",
-            "reasons": ["当前只有一笔盘口快照，缺少赔率变化轨迹。"],
-            "breakdown": {},
-            "signal": "neutral",
-            "generated_at": now,
-            "signals": [],
-        }
+        return _single_snapshot_recommendation(snapshot, now)
+    if not _history_has_actionable_signal(snapshot, historical, live_score):
+        return _single_snapshot_recommendation(snapshot, now)
 
     previous = historical[-1]
     opening = historical[0]
@@ -196,11 +185,181 @@ def _runner_price(runner: dict) -> float | None:
     return best_price or worst_price
 
 
+def _single_snapshot_recommendation(snapshot: dict, now: datetime) -> dict:
+    candidates = []
+    overround = float(snapshot.get("extra", {}).get("overround") or 1.06)
+    live_score = snapshot.get("live_score") or {}
+
+    for runner in snapshot["runners"]:
+        price = _runner_price(runner)
+        if price is None:
+            continue
+        candidates.append(
+            {
+                "name": runner["name"],
+                "side_key": runner.get("outcome_key") or _infer_outcome_key(runner, snapshot),
+                "price": price,
+                "width": float(runner.get("market_width") or runner.get("spread") or 0.0),
+            }
+        )
+
+    if len(candidates) < 3:
+        return {
+            "market_id": snapshot["market_id"],
+            "recommendation": "不下注",
+            "selection_name": "",
+            "market_label": "胜平负",
+            "score": 0.0,
+            "confidence_label": "不下注",
+            "risk_level": "High",
+            "reasons": ["当前抓取到的盘口信息不足，无法形成有效建议。"],
+            "breakdown": {},
+            "signal": "neutral",
+            "generated_at": now,
+            "signals": [],
+        }
+
+    ordered = sorted(candidates, key=lambda item: item["price"])
+    favorite = ordered[0]
+    second = ordered[1]
+    third = ordered[2]
+    favorite_prob = round(1 / favorite["price"], 4)
+    second_prob = round(1 / second["price"], 4)
+    probability_gap = max(0.0, favorite_prob - second_prob)
+    price_gap = max(0.0, second["price"] - favorite["price"])
+    outer_gap = max(0.0, third["price"] - second["price"])
+
+    favorite_score = (
+        18.0 if favorite_prob >= 0.66
+        else 14.0 if favorite_prob >= 0.56
+        else 10.0 if favorite_prob >= 0.49
+        else 6.0 if favorite_prob >= 0.43
+        else 3.0 if favorite_prob >= 0.39
+        else 0.0
+    )
+    gap_score = _clamp(probability_gap * 140.0, 0.0, 22.0)
+    separation_score = _clamp(outer_gap * 2.5, 0.0, 8.0)
+    width_penalty = _clamp(favorite["width"] * 16.0, 0.0, 7.0)
+    margin_penalty = _clamp(abs(overround - 1.0) * 35.0, 0.0, 6.0)
+    balance_penalty = 8.0 if favorite_prob < 0.41 else 5.0 if favorite_prob < 0.45 else 0.0
+    draw_penalty = 8.0 if favorite["side_key"] == "draw" else 0.0
+    short_price_penalty = (
+        28.0 if favorite["price"] <= 1.08
+        else 16.0 if favorite["price"] <= 1.14
+        else 9.0 if favorite["price"] <= 1.24
+        else 4.0 if favorite["price"] <= 1.35
+        else 0.0
+    )
+    live_unknown_penalty = 10.0 if snapshot.get("in_play") and not live_score.get("matched") else 0.0
+
+    total_score = round(
+        _clamp(
+            46.0
+            + favorite_score
+            + gap_score
+            + separation_score
+            - width_penalty
+            - margin_penalty
+            - balance_penalty
+            - draw_penalty
+            - short_price_penalty
+            - live_unknown_penalty,
+            0.0,
+            100.0,
+        ),
+        2,
+    )
+
+    too_short_to_chase = favorite["price"] <= 1.08
+    cautious_only = snapshot.get("in_play") and not live_score.get("matched")
+
+    if favorite["side_key"] != "draw" and total_score >= 72.0 and not cautious_only and not too_short_to_chase:
+        recommendation = _side_label(favorite["side_key"])
+        signal = "bullish"
+    elif favorite["side_key"] != "draw" and total_score >= 58.0 and not too_short_to_chase:
+        recommendation = "观察 " + _side_label(favorite["side_key"])
+        signal = "neutral"
+    else:
+        recommendation = "不下注"
+        signal = "neutral"
+
+    reasons = [
+        f"{favorite['name']} 当前是最低赔率方向，赔率 {favorite['price']:.2f}。",
+        f"与次低赔率方向相比差值 {price_gap:.2f}，隐含概率领先 {probability_gap * 100:.1f}%。",
+        "当前只有一笔网页抓取快照，建议把这次判断当作盘形参考，不要当成高置信度信号。",
+    ]
+
+    if snapshot.get("in_play") and not live_score.get("matched"):
+        reasons.append("这场比赛当前被判定为滚球，但系统还没有抓到实时比分，因此只适合做观察，不适合直接追单。")
+
+    if too_short_to_chase:
+        reasons.append(f"{favorite['name']} 赔率已经压到 {favorite['price']:.2f}，回报空间太薄，宁可放弃也不追这种超低赔。")
+
+    if favorite["width"] >= 0.25:
+        reasons.append(f"该方向盘口分歧 {favorite['width']:.2f} 偏大，需要降低仓位。")
+
+    return {
+        "market_id": snapshot["market_id"],
+        "recommendation": recommendation,
+        "selection_name": favorite["name"] if recommendation != "不下注" else "",
+        "market_label": "胜平负",
+        "score": total_score,
+        "confidence_label": label_by_score(total_score),
+        "risk_level": "High",
+        "reasons": reasons,
+        "breakdown": {
+            "favorite_score": round(favorite_score, 2),
+            "gap_score": round(gap_score, 2),
+            "separation_score": round(separation_score, 2),
+            "width_penalty": round(width_penalty, 2),
+            "margin_penalty": round(margin_penalty, 2),
+            "balance_penalty": round(balance_penalty + draw_penalty, 2),
+            "short_price_penalty": round(short_price_penalty, 2),
+            "live_unknown_penalty": round(live_unknown_penalty, 2),
+        },
+        "signal": signal,
+        "generated_at": now,
+        "signals": [],
+    }
+
+
 def _history_runner_price(point: dict, selection_id: int) -> float | None:
     runner = next((item for item in point.get("runners", []) if item["selection_id"] == selection_id), None)
     if not runner:
         return None
     return _runner_price(runner)
+
+
+def _history_has_actionable_signal(snapshot: dict, historical: Sequence[dict], live_score: dict) -> bool:
+    if live_score.get("matched"):
+        return True
+
+    if len(historical) < 2:
+        return False
+
+    for runner in snapshot.get("runners", []):
+        selection_id = runner.get("selection_id")
+        current_price = _runner_price(runner)
+        if selection_id is None or current_price is None:
+            continue
+
+        prices = [
+            price
+            for price in (_history_runner_price(point, selection_id) for point in historical)
+            if price is not None
+        ]
+        if not prices:
+            continue
+
+        low = min(prices + [current_price])
+        high = max(prices + [current_price])
+        absolute_move = high - low
+        relative_move = absolute_move / max(low, 1.01)
+
+        if absolute_move >= 0.03 or relative_move >= 0.01:
+            return True
+
+    return False
 
 
 def _infer_outcome_key(runner: dict, snapshot: dict) -> str:

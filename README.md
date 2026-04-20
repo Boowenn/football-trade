@@ -1,86 +1,137 @@
 # 足球赔率分析可视化系统
 
-这是一个不依赖 Betfair 的纯免费版足球盘口分析 MVP。
+一个基于 FastAPI 的免费足球赔率看盘面板。当前默认模式不依赖 Betfair，也不依赖付费 API，而是直接抓取 BetExplorer 网页中的胜平负赔率，生成比赛列表、盘口结构和辅助下注建议。
 
-系统现在只围绕两类数据工作：
+## 当前版本做了什么
 
-- API-Football 的比赛、比分、事件和胜平负赔率
-- 无 key 时的本地演示赔率与演示比分回退
+- 默认使用 `BetExplorer` 网页抓取模式
+- 展示可抓取到的赛前/滚球比赛列表
+- 展示胜平负赔率、超额利润、盘口分歧、赔率走势和隐含概率
+- 输出基于盘口强弱、赔率差距、超低赔惩罚、盘口分歧的建议
+- 前端默认优先选中一场有明确方向的比赛
+- 默认端口改为 `5001`
 
-它不再提供交易所语义的数据：
+## 不包含什么
 
-- 没有 Back / Lay
-- 没有成交量
-- 没有挂单深度
-- 没有 Whale 资金流检测
+当前版本不是 Betfair 交易所系统，也不是资金流分析系统。下面这些数据现在都没有：
 
-当前建议逻辑基于以下因素输出辅助下注建议：
+- Betfair Back / Lay
+- 成交量
+- 挂单深度
+- Whale 检测
+- 真实投注量
+- 默认实时比分和比赛事件
 
-- 博彩公司赔率从开盘到当前的收缩或上浮
-- 不同博彩公司之间的盘口分歧
-- 实时比分、红牌和比赛分钟
+## 当前数据源
 
-## 启动
+默认数据源：
 
-1. 运行 `start.bat`
-2. 浏览器打开 `http://127.0.0.1:8000`
+- `DATA_MODE=betexplorer_scrape`
+- `LIVE_SCORE_MODE=off`
 
-## 推荐配置
+说明：
 
-推荐直接用：
+- 赔率来自 BetExplorer 网页抓取
+- 当前主要抓取胜平负盘口
+- `bookmakers` 面板目前是基于抓取页面整理出的单源展示，不是完整多书商明细
+- 如果页面结构变动，抓取可能失效
 
-- `DATA_MODE=auto`
-- `LIVE_SCORE_MODE=auto`
+## 下注建议逻辑
 
-行为如下：
+当前建议不是“预测比分”，而是盘口结构辅助判断，核心规则包括：
 
-- 已配置 `API_FOOTBALL_KEY`：自动使用 API-Football 真实免费数据
-- 未配置 `API_FOOTBALL_KEY`：自动回退到演示赔率和演示比分，页面仍可正常展示
+- 最低赔率方向与第二低赔率方向的差距
+- 隐含概率领先幅度
+- 盘口分歧惩罚
+- 超低赔过滤
+- 历史赔率如果没有真实变化，不强行按趋势模型打分
+- 没有实时比分时，不把无效滚球噪音当成强信号
 
-如果你只想强制跑真实数据，也可以手动设置：
+因此页面上会同时出现：
 
-- `DATA_MODE=api_football_odds`
-- `LIVE_SCORE_MODE=api_football`
+- `主胜 / 客胜`
+- `观察 主胜 / 观察 客胜`
+- `不下注`
 
-如果你只想本地演示：
+`不下注` 不是异常，通常代表盘口优势不够、赔率太薄，或者当前抓到的信息不足以支持直接下单。
 
-- `DATA_MODE=demo`
-- `LIVE_SCORE_MODE=demo`
+## 启动方式
+
+### 方式一
+
+直接双击：
+
+```bat
+start.bat
+```
+
+### 方式二
+
+手动运行：
+
+```powershell
+cd D:\football
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 5001
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:5001
+```
 
 ## 环境变量
 
-编辑 `.env`：
+参考 `.env.example`。
+
+推荐最小配置：
 
 ```env
-DATA_MODE=auto
-LIVE_SCORE_MODE=auto
+APP_PORT=5001
 
-API_FOOTBALL_KEY=你的免费API_FOOTBALL_KEY
+DATA_MODE=betexplorer_scrape
+LIVE_SCORE_MODE=off
+
+TRACKED_MARKETS_LIMIT=6
+MARKET_WINDOW_HOURS=18
+```
+
+可选备用配置：
+
+```env
+API_FOOTBALL_KEY=
 API_FOOTBALL_BASE_URL=https://v3.football.api-sports.io
 API_FOOTBALL_TIMEZONE=Asia/Tokyo
-
-PREFERRED_BOOKMAKERS=Bet365,William Hill,1xBet,Pinnacle,Unibet
-TARGET_LEAGUE_IDS=
 ```
 
 说明：
 
-- `API_FOOTBALL_KEY` 为空时，系统会自动回退到演示数据
-- `PREFERRED_BOOKMAKERS` 可以缩小赔率来源，减少噪音
-- `TARGET_LEAGUE_IDS` 可以只追踪特定联赛，进一步控制免费请求数
-- 当前默认轮询已经压到免费档可承受的级别，不适合做高频准实时盯盘
+- 抓取模式默认不依赖 `API_FOOTBALL_KEY`
+- `API_FOOTBALL_KEY` 目前仅作为备用模式保留
+- `TRACKED_MARKETS_LIMIT` 控制首页展示的比赛数
+- `PREFERRED_BOOKMAKERS` 和 `TARGET_LEAGUE_IDS` 可以进一步收缩范围
 
-## 页面内容
+## 主要文件
 
-- 比赛列表
-- 单场详情
-- 实时比分与事件流
-- 博彩公司赔率表
-- 赔率走势和隐含概率走势
-- 基于赔率变化、盘口分歧、比分和红牌的下注建议
+- `backend/app/main.py`: FastAPI 入口
+- `backend/app/services/providers.py`: 数据源与 BetExplorer 抓取逻辑
+- `backend/app/services/analyzer.py`: 下注建议逻辑
+- `backend/app/services/market_hub.py`: 市场汇总、排序、缓存和推送
+- `backend/app/static/index.html`: 前端页面
+- `backend/app/static/app.js`: 前端交互和渲染
+- `scripts/start.ps1`: 启动脚本
 
-## 说明
+## 已知限制
 
-- 这是辅助决策工具，不是自动下注系统
-- 免费档是 `100 requests/day` 级别，不能长期高频刷新；想稳定使用就要接受低频轮询
-- 若要长期跑真实数据，建议把追踪联赛和博彩公司范围收窄
+- 目前没有稳定的免费实时比分抓取
+- 当前建议更适合做盘口参考，不适合当成全自动下注信号
+- 单网页抓取模式下，盘口变化的时间序列信息比较弱
+- 如果远端网站改版，需要同步调整解析逻辑
+
+## 本次仓库更新包含
+
+- 切到 BetExplorer 抓取模式作为默认数据源
+- 修正 `5001` 端口配置和启动脚本
+- 修正前端等待态和图表组件容错
+- 调整建议引擎，避免“有历史点但没有真实波动”时全变成 `不下注`
+- 重写 README，和当前代码实现保持一致
