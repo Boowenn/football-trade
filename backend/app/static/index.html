@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>足球赔率分析可视化系统</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand-card">
+                <div class="eyebrow">纯免费版 · 博彩公司赔率</div>
+                <h1>足球赔率分析可视化系统</h1>
+                <p>基于 API-Football 的真实比赛、比分、红黄牌和博彩公司胜平负盘口，输出辅助下注建议。</p>
+                <div class="status-strip">
+                    <span id="providerBadge" class="pill">盘口源：--</span>
+                    <span id="liveBadge" class="pill ghost">比分源：--</span>
+                    <span id="modeBadge" class="pill ghost">模式：--</span>
+                </div>
+                <div id="systemNotice" class="empty-block system-notice">正在检查配置…</div>
+            </div>
+
+            <div class="section-head">
+                <h2>比赛列表</h2>
+                <button id="refreshButton" class="refresh-button" type="button">刷新</button>
+            </div>
+
+            <div id="matchList" class="match-list"></div>
+        </aside>
+
+        <main class="main-board">
+            <section class="hero-panel">
+                <div class="hero-copy">
+                    <div id="marketStatus" class="eyebrow">等待数据</div>
+                    <h2 id="eventTitle">当前没有可展示的比赛</h2>
+                    <p id="eventMeta">请先配置免费 API key，然后刷新页面。</p>
+
+                    <div class="recommendation-card">
+                        <div class="recommendation-label">辅助下注建议</div>
+                        <div id="recommendationAction" class="recommendation-action">等待数据</div>
+                        <div id="recommendationSelection" class="recommendation-selection">暂无建议方向</div>
+                        <div class="recommendation-metrics">
+                            <div>
+                                <span>评分</span>
+                                <strong id="recommendationScore">--</strong>
+                            </div>
+                            <div>
+                                <span>风险</span>
+                                <strong id="recommendationRisk">--</strong>
+                            </div>
+                        </div>
+                        <ul id="recommendationReasons" class="reason-list"></ul>
+                    </div>
+                </div>
+
+                <div class="scoreboard-card">
+                    <div class="scoreboard-top">
+                        <span id="scoreStatus" class="score-status">暂无实时比分</span>
+                        <span id="scoreProvider" class="pill ghost">比分源：--</span>
+                    </div>
+                    <div class="scoreboard-main">
+                        <div class="team-block">
+                            <span id="scoreHomeName">主队</span>
+                            <strong id="scoreHomeValue">-</strong>
+                        </div>
+                        <div class="clock-block">
+                            <div id="scoreMinute" class="clock-value">--</div>
+                            <div id="scoreCards" class="clock-meta">黄牌 0-0 | 红牌 0-0</div>
+                        </div>
+                        <div class="team-block">
+                            <span id="scoreAwayName">客队</span>
+                            <strong id="scoreAwayValue">-</strong>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="metrics-grid">
+                <article class="metric-card">
+                    <span>博彩公司数</span>
+                    <strong id="metricBookmakers">--</strong>
+                </article>
+                <article class="metric-card">
+                    <span>超额率</span>
+                    <strong id="metricOverround">--</strong>
+                </article>
+                <article class="metric-card">
+                    <span>盘口分歧</span>
+                    <strong id="metricSpread">--</strong>
+                </article>
+                <article class="metric-card">
+                    <span>市场信号</span>
+                    <strong id="metricSignal">--</strong>
+                </article>
+                <article class="metric-card">
+                    <span>比赛分钟</span>
+                    <strong id="metricLive">--</strong>
+                </article>
+                <article class="metric-card">
+                    <span>红黄牌</span>
+                    <strong id="metricCards">--</strong>
+                </article>
+            </section>
+
+            <section class="grid-two">
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>赔率走势图</h3>
+                        <span id="oddsCaption">等待赔率数据</span>
+                    </div>
+                    <div id="oddsChart" class="chart"></div>
+                </article>
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>隐含概率走势</h3>
+                        <span id="probabilityCaption">按赔率换算</span>
+                    </div>
+                    <div id="probabilityChart" class="chart"></div>
+                </article>
+            </section>
+
+            <section class="grid-two">
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>博彩公司盘口</h3>
+                        <span>主胜 / 平 / 客胜</span>
+                    </div>
+                    <div id="bookmakerPanel" class="bookmaker-panel"></div>
+                </article>
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>比赛事件</h3>
+                        <span>进球 / 红黄牌 / 换人</span>
+                    </div>
+                    <div id="eventsPanel" class="events-panel"></div>
+                </article>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h3>信号面板</h3>
+                    <span>赔率变化 / 盘口分歧 / 比赛事件</span>
+                </div>
+                <div id="signalPanel" class="signal-panel"></div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h3>多场监控</h3>
+                    <span>真实比赛列表</span>
+                </div>
+                <div class="table-wrap">
+                    <table class="monitor-table">
+                        <thead>
+                            <tr>
+                                <th>比赛</th>
+                                <th>比分</th>
+                                <th>分钟</th>
+                                <th>博彩公司</th>
+                                <th>盘口分歧</th>
+                                <th>信号</th>
+                                <th>评分</th>
+                                <th>更新时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="monitorTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="footer-note">
+                    <span>最近更新时间：</span>
+                    <strong id="metricUpdated">--</strong>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

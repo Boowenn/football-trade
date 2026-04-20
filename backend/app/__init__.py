@@ -1,0 +1,1 @@
+"""Football odds analytics app."""
