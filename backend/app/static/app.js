@@ -84,6 +84,7 @@ const elements = {
   eventsPanel: document.getElementById("eventsPanel"),
   bookmakerPanel: document.getElementById("bookmakerPanel"),
   relatedMarketsPanel: document.getElementById("relatedMarketsPanel"),
+  playListPanel: document.getElementById("playListPanel"),
   monitorTableBody: document.getElementById("monitorTableBody"),
   oddsCaption: document.getElementById("oddsCaption"),
   probabilityCaption: document.getElementById("probabilityCaption"),
@@ -140,6 +141,11 @@ function sideText(value) {
     balanced: "均衡",
     over: "大球",
     under: "小球",
+    yes: "是",
+    no: "否",
+    home_or_draw: "1X",
+    home_or_away: "12",
+    away_or_draw: "X2",
   }[value] || value || "--";
 }
 
@@ -369,6 +375,7 @@ function renderEmptyDashboard() {
   elements.eventsPanel.innerHTML = '<div class="empty-block">暂无比赛事件。</div>';
   elements.bookmakerPanel.innerHTML = '<div class="empty-block">暂无博彩公司报价。</div>';
   elements.relatedMarketsPanel.innerHTML = '<div class="empty-block">暂无亚盘和大小球数据。</div>';
+  elements.playListPanel.innerHTML = '<div class="empty-block">暂无玩法建议。</div>';
   elements.oddsCaption.textContent = "等待数据";
   elements.probabilityCaption.textContent = "等待数据";
   renderEmptyCharts("等待数据");
@@ -454,7 +461,9 @@ function renderSnapshot(snapshot, timeseries) {
   elements.scoreCards.textContent = formatCards(liveScore);
 
   elements.recommendationAction.textContent = recommendation.recommendation || "不下注";
-  elements.recommendationSelection.textContent = recommendation.selection_name || "暂无明确方向";
+  elements.recommendationSelection.textContent = recommendation.selection_name
+    ? `${recommendation.market_label || "玩法"} | ${recommendation.selection_name}`
+    : recommendation.market_label || "暂无明确方向";
   elements.recommendationScore.textContent = Math.round(recommendation.score || 0);
   elements.recommendationRisk.textContent = localizeRisk(recommendation.risk_level);
   elements.recommendationReasons.innerHTML = (recommendation.reasons || [])
@@ -473,6 +482,7 @@ function renderSnapshot(snapshot, timeseries) {
   renderEvents(liveScore.events || []);
   renderBookmakers(extra.bookmakers || []);
   renderRelatedMarkets(extra.related_markets || {});
+  renderPlayList(recommendation.plays || []);
   renderOddsChart(snapshot, timeseries);
   renderProbabilityChart(snapshot, timeseries);
 }
@@ -560,6 +570,12 @@ function renderRelatedMarkets(relatedMarkets) {
   const ahSummary = asianHandicap.summary || {};
   const overUnder = relatedMarkets.over_under || {};
   const ouSummary = overUnder.summary || {};
+  const drawNoBet = relatedMarkets.draw_no_bet || {};
+  const dnbSummary = drawNoBet.summary || {};
+  const doubleChance = relatedMarkets.double_chance || {};
+  const dcSummary = doubleChance.summary || {};
+  const btts = relatedMarkets.both_teams_to_score || {};
+  const bttsSummary = btts.summary || {};
 
   const cards = [
     buildMarketCard(
@@ -571,6 +587,7 @@ function renderRelatedMarkets(relatedMarkets) {
         ["均价平局", formatPrice(matchSummary.avg_draw)],
         ["均价客胜", formatPrice(matchSummary.avg_away)],
       ],
+      buildTripleRows(matchWinner.rows || [], "home", "draw", "away", "主胜", "平", "客胜"),
     ),
     buildMarketCard(
       "亚盘主线",
@@ -594,6 +611,37 @@ function renderRelatedMarkets(relatedMarkets) {
         ["小球均价", formatPrice(ouSummary.avg_under)],
       ],
       buildTwoWayRows(overUnder.rows || [], "line", "over", "under", "大球", "小球", false),
+    ),
+    buildMarketCard(
+      "平局退款",
+      drawNoBet.bookmaker_count || 0,
+      [
+        ["倾向", sideText(dnbSummary.lean)],
+        ["主队平退", formatPrice(dnbSummary.avg_home)],
+        ["客队平退", formatPrice(dnbSummary.avg_away)],
+      ],
+      buildDualRows(drawNoBet.rows || [], "home", "away", "主队", "客队"),
+    ),
+    buildMarketCard(
+      "双重机会",
+      doubleChance.bookmaker_count || 0,
+      [
+        ["倾向", sideText(dcSummary.lean)],
+        ["1X", formatPrice(dcSummary.avg_home_or_draw)],
+        ["12", formatPrice(dcSummary.avg_home_or_away)],
+        ["X2", formatPrice(dcSummary.avg_away_or_draw)],
+      ],
+      buildTripleRows(doubleChance.rows || [], "home_or_draw", "home_or_away", "away_or_draw", "1X", "12", "X2"),
+    ),
+    buildMarketCard(
+      "BTTS",
+      btts.bookmaker_count || 0,
+      [
+        ["倾向", sideText(bttsSummary.lean)],
+        ["是", formatPrice(bttsSummary.avg_yes)],
+        ["否", formatPrice(bttsSummary.avg_no)],
+      ],
+      buildDualRows(btts.rows || [], "yes", "no", "是", "否"),
     ),
   ];
 
@@ -646,6 +694,91 @@ function buildTwoWayRows(rows, lineKey, leftKey, rightKey, leftLabel, rightLabel
         .join("")}
     </div>
   `;
+}
+
+function buildDualRows(rows, leftKey, rightKey, leftLabel, rightLabel) {
+  if (!rows.length) return "";
+  return `
+    <div class="market-mini-table">
+      <div class="market-mini-head">${escapeHtml(leftLabel)} / ${escapeHtml(rightLabel)}</div>
+      ${rows
+        .slice(0, 5)
+        .map(
+          (row) => `
+            <div class="market-mini-row">
+              <span>${escapeHtml(row.name || "--")}</span>
+              <span></span>
+              <span>${escapeHtml(row[leftKey] != null ? Number(row[leftKey]).toFixed(2) : "--")}</span>
+              <span>${escapeHtml(row[rightKey] != null ? Number(row[rightKey]).toFixed(2) : "--")}</span>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function buildTripleRows(rows, firstKey, secondKey, thirdKey, firstLabel, secondLabel, thirdLabel) {
+  if (!rows.length) return "";
+  return `
+    <div class="market-mini-table">
+      <div class="market-mini-head">${escapeHtml(firstLabel)} / ${escapeHtml(secondLabel)} / ${escapeHtml(thirdLabel)}</div>
+      ${rows
+        .slice(0, 5)
+        .map(
+          (row) => `
+            <div class="market-mini-row">
+              <span>${escapeHtml(row.name || "--")}</span>
+              <span>${escapeHtml(row[firstKey] != null ? Number(row[firstKey]).toFixed(2) : "--")}</span>
+              <span>${escapeHtml(row[secondKey] != null ? Number(row[secondKey]).toFixed(2) : "--")}</span>
+              <span>${escapeHtml(row[thirdKey] != null ? Number(row[thirdKey]).toFixed(2) : "--")}</span>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderPlayList(plays) {
+  if (!plays.length) {
+    elements.playListPanel.innerHTML = '<div class="empty-block">当前没有可展示的玩法分层。</div>';
+    return;
+  }
+
+  elements.playListPanel.innerHTML = plays
+    .map((play, index) => `
+      <article class="play-card ${index === 0 ? "primary" : ""}">
+        <div class="play-card-head">
+          <div>
+            <div class="play-card-rank">${escapeHtml(index === 0 ? "主推" : `备选 ${index}`)}</div>
+            <div class="play-card-title">${escapeHtml(play.full_label || "--")}</div>
+            <div class="play-card-meta">${escapeHtml(play.selection_name || play.market_label || "--")}</div>
+          </div>
+          <div class="play-card-score">
+            <strong>${escapeHtml(String(Math.round(play.score || 0)))}</strong>
+            <span>${escapeHtml(play.confidence_label || "--")}</span>
+          </div>
+        </div>
+        <div class="play-card-body">
+          <div class="play-card-row">
+            <span>赔率</span>
+            <strong>${escapeHtml(play.price != null ? Number(play.price).toFixed(2) : "--")}</strong>
+          </div>
+          <div class="play-card-row">
+            <span>信号</span>
+            <strong>${escapeHtml(localizeSignal(play.signal))}</strong>
+          </div>
+        </div>
+        <ul>
+          ${(play.reasons || [])
+            .slice(0, 3)
+            .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+            .join("")}
+        </ul>
+      </article>
+    `)
+    .join("");
 }
 
 function formatPrice(value) {

@@ -347,6 +347,12 @@ select {
   gap: 12px;
 }
 
+.play-list-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .signal-card,
 .event-item {
   border-radius: 18px;
@@ -481,6 +487,83 @@ select {
   color: var(--text);
 }
 
+.play-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(12, 24, 39, 0.82);
+  display: grid;
+  gap: 10px;
+}
+
+.play-card.primary {
+  border-color: rgba(255, 184, 77, 0.42);
+  background: linear-gradient(180deg, rgba(36, 27, 10, 0.55), rgba(12, 24, 39, 0.88));
+}
+
+.play-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.play-card-rank {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.play-card-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.play-card-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.play-card-score {
+  text-align: right;
+}
+
+.play-card-score strong {
+  display: block;
+  font-size: 26px;
+}
+
+.play-card-score span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.play-card-body {
+  display: grid;
+  gap: 8px;
+}
+
+.play-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.play-card-row strong {
+  color: var(--text);
+}
+
+.play-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  display: grid;
+  gap: 6px;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -540,6 +623,10 @@ select {
   .metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .play-list-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 1280px) {
@@ -561,6 +648,10 @@ select {
   .grid-two,
   .metrics-grid,
   .scoreboard-main {
+    grid-template-columns: 1fr;
+  }
+
+  .play-list-grid {
     grid-template-columns: 1fr;
   }
 

@@ -296,6 +296,9 @@ class BetExplorerScrapeProvider(MarketProvider):
             "match_winner": self._fetch_best_odds(event_id, "1x2"),
             "over_under": self._fetch_best_odds(event_id, "ou"),
             "asian_handicap": self._fetch_best_odds(event_id, "ah"),
+            "draw_no_bet": self._fetch_best_odds(event_id, "ha"),
+            "double_chance": self._fetch_best_odds(event_id, "dc"),
+            "both_teams_to_score": self._fetch_best_odds(event_id, "bts"),
         }
         names = list(tasks)
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -384,6 +387,48 @@ class BetExplorerScrapeProvider(MarketProvider):
                 "summary": summary,
             }
 
+        if bet_type == "ha":
+            rows = self._parse_simple_two_way_rows(active_table, "home", "away")
+            if not rows:
+                return None
+            return {
+                "market_type": "draw_no_bet",
+                "active_line": 0.0,
+                "available_lines": [0.0],
+                "line_count": 1,
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": _aggregate_two_way_rows(rows, "home", "away"),
+            }
+
+        if bet_type == "dc":
+            rows = self._parse_simple_three_way_rows(active_table, "home_or_draw", "home_or_away", "away_or_draw")
+            if not rows:
+                return None
+            return {
+                "market_type": "double_chance",
+                "active_line": 0.0,
+                "available_lines": [0.0],
+                "line_count": 1,
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": _aggregate_three_way_rows(rows, "home_or_draw", "home_or_away", "away_or_draw"),
+            }
+
+        if bet_type == "bts":
+            rows = self._parse_simple_two_way_rows(active_table, "yes", "no")
+            if not rows:
+                return None
+            return {
+                "market_type": "both_teams_to_score",
+                "active_line": 0.0,
+                "available_lines": [0.0],
+                "line_count": 1,
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": _aggregate_two_way_rows(rows, "yes", "no"),
+            }
+
         return None
 
     def _extract_active_line(self, soup: BeautifulSoup, available_lines: list[float]) -> float | None:
@@ -442,6 +487,62 @@ class BetExplorerScrapeProvider(MarketProvider):
                     "line": round(line if line is not None else table_line or 0.0, 2),
                     left_key: round(left_price, 3),
                     right_key: round(right_price, 3),
+                }
+            )
+        return rows
+
+    def _parse_simple_two_way_rows(self, table: Any, left_key: str, right_key: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for row in table.select("tr[data-bid]"):
+            cells = row.find_all("td", recursive=False)
+            if len(cells) < 6:
+                continue
+            name = _extract_betexplorer_bookmaker_name(cells[0])
+            if not _is_supported_scrape_bookmaker(name):
+                continue
+
+            left_price = _safe_float(cells[4].get("data-odd"))
+            right_price = _safe_float(cells[5].get("data-odd"))
+            if left_price is None or right_price is None:
+                continue
+
+            rows.append(
+                {
+                    "name": name or "Bookmaker",
+                    left_key: round(left_price, 3),
+                    right_key: round(right_price, 3),
+                }
+            )
+        return rows
+
+    def _parse_simple_three_way_rows(
+        self,
+        table: Any,
+        first_key: str,
+        second_key: str,
+        third_key: str,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for row in table.select("tr[data-bid]"):
+            cells = row.find_all("td", recursive=False)
+            if len(cells) < 7:
+                continue
+            name = _extract_betexplorer_bookmaker_name(cells[0])
+            if not _is_supported_scrape_bookmaker(name):
+                continue
+
+            first_price = _safe_float(cells[4].get("data-odd"))
+            second_price = _safe_float(cells[5].get("data-odd"))
+            third_price = _safe_float(cells[6].get("data-odd"))
+            if first_price is None or second_price is None or third_price is None:
+                continue
+
+            rows.append(
+                {
+                    "name": name or "Bookmaker",
+                    first_key: round(first_price, 3),
+                    second_key: round(second_price, 3),
+                    third_key: round(third_price, 3),
                 }
             )
         return rows
@@ -1237,6 +1338,47 @@ def _aggregate_two_way_rows(rows: list[dict[str, Any]], left_key: str, right_key
         f"best_{right_key}": round(max(right_values), 3),
         "lean": lean,
         "lean_strength": round(abs(left_prob - right_prob), 4),
+    }
+
+
+def _aggregate_three_way_rows(
+    rows: list[dict[str, Any]],
+    first_key: str,
+    second_key: str,
+    third_key: str,
+) -> dict[str, Any]:
+    if not rows:
+        return {}
+
+    first_values = [float(row[first_key]) for row in rows if row.get(first_key) is not None]
+    second_values = [float(row[second_key]) for row in rows if row.get(second_key) is not None]
+    third_values = [float(row[third_key]) for row in rows if row.get(third_key) is not None]
+    if not first_values or not second_values or not third_values:
+        return {}
+
+    averages = {
+        first_key: _round_mean(first_values),
+        second_key: _round_mean(second_values),
+        third_key: _round_mean(third_values),
+    }
+    preferred = min(averages, key=lambda key: averages.get(key) if averages.get(key) is not None else 999.0)
+    sorted_values = sorted(
+        ((key, value) for key, value in averages.items() if value is not None),
+        key=lambda item: item[1],
+    )
+    margin = 0.0
+    if len(sorted_values) >= 2:
+        margin = round(abs((1 / sorted_values[0][1]) - (1 / sorted_values[1][1])), 4)
+
+    return {
+        f"avg_{first_key}": averages[first_key],
+        f"avg_{second_key}": averages[second_key],
+        f"avg_{third_key}": averages[third_key],
+        f"best_{first_key}": round(max(first_values), 3),
+        f"best_{second_key}": round(max(second_values), 3),
+        f"best_{third_key}": round(max(third_values), 3),
+        "lean": preferred,
+        "lean_strength": margin,
     }
 
 
