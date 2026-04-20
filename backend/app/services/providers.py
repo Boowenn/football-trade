@@ -268,14 +268,233 @@ class BetExplorerScrapeProvider(MarketProvider):
 
     async def _fetch_market_quotes(self) -> list[MarketQuote]:
         quotes = await self._fetch_listing_quotes("/football/results/")
-        if quotes:
-            return quotes
-        return await self._fetch_listing_quotes("/football/")
+        if not quotes:
+            quotes = await self._fetch_listing_quotes("/football/")
+        if not quotes:
+            return []
+        return await self._enrich_quotes_with_comparison_markets(quotes)
 
     async def _fetch_listing_quotes(self, path: str) -> list[MarketQuote]:
         response = await self.client.get(path)
         response.raise_for_status()
         return self._parse_listing_page(response.text, path)
+
+    async def _enrich_quotes_with_comparison_markets(self, quotes: list[MarketQuote]) -> list[MarketQuote]:
+        tasks = [self._fetch_comparison_markets(quote.event_id) for quote in quotes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        enriched: list[MarketQuote] = []
+        for quote, result in zip(quotes, results, strict=False):
+            if isinstance(result, Exception):
+                enriched.append(quote)
+                continue
+            enriched.append(self._merge_comparison_markets(quote, result))
+        return enriched
+
+    async def _fetch_comparison_markets(self, event_id: str) -> dict[str, Any]:
+        tasks = {
+            "match_winner": self._fetch_best_odds(event_id, "1x2"),
+            "over_under": self._fetch_best_odds(event_id, "ou"),
+            "asian_handicap": self._fetch_best_odds(event_id, "ah"),
+        }
+        names = list(tasks)
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        markets: dict[str, Any] = {}
+        for name, result in zip(names, results, strict=False):
+            if isinstance(result, Exception) or not result:
+                continue
+            markets[name] = result
+        return markets
+
+    async def _fetch_best_odds(self, event_id: str, bet_type: str) -> dict[str, Any] | None:
+        response = await self.client.get(f"/match-odds/{event_id}/0/{bet_type}/bestOdds/", params={"lang": "en"})
+        response.raise_for_status()
+        payload = response.json()
+        html = payload.get("odds")
+        if not html:
+            return None
+        return self._parse_best_odds_html(str(html), bet_type)
+
+    def _parse_best_odds_html(self, html: str, bet_type: str) -> dict[str, Any] | None:
+        soup = BeautifulSoup(html, "lxml")
+        if bet_type == "1x2":
+            table = soup.select_one("table.table-main[data-handicap]") or soup.select_one("table.table-main")
+            if table is None:
+                return None
+            rows = self._parse_1x2_rows(table)
+            if not rows:
+                return None
+            return {
+                "market_type": "match_winner",
+                "active_line": 0.0,
+                "available_lines": [0.0],
+                "line_count": 1,
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": _aggregate_match_winner_rows(rows),
+            }
+
+        available_lines = _extract_available_lines(soup)
+        active_line = self._extract_active_line(soup, available_lines)
+        active_table = None
+        if active_line is not None:
+            active_table = soup.select_one(f'table[data-handicap="{active_line:.2f}"]')
+        if active_table is None and available_lines:
+            active_table = soup.select_one(f'table[data-handicap="{available_lines[0]:.2f}"]')
+        if active_table is None:
+            active_table = soup.select_one("table.table-main[data-handicap]")
+        if active_table is None:
+            return None
+
+        if bet_type == "ou":
+            rows = self._parse_two_way_rows(active_table, "over", "under")
+            if not rows:
+                return None
+            primary_line = active_line if active_line is not None else _safe_float(active_table.get("data-handicap"))
+            return {
+                "market_type": "over_under",
+                "active_line": primary_line,
+                "available_lines": available_lines,
+                "line_count": len(available_lines),
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": _aggregate_two_way_rows(rows, "over", "under"),
+            }
+
+        if bet_type == "ah":
+            rows = self._parse_two_way_rows(active_table, "home", "away")
+            if not rows:
+                return None
+            primary_line = active_line if active_line is not None else _safe_float(active_table.get("data-handicap"))
+            summary = _aggregate_two_way_rows(rows, "home", "away")
+            if primary_line is not None:
+                summary["line_favored_side"] = _handicap_favored_side(primary_line)
+                summary["line_strength"] = round(abs(primary_line), 2)
+            else:
+                summary["line_favored_side"] = "balanced"
+                summary["line_strength"] = 0.0
+            return {
+                "market_type": "asian_handicap",
+                "active_line": primary_line,
+                "available_lines": available_lines,
+                "line_count": len(available_lines),
+                "bookmaker_count": len(rows),
+                "rows": rows,
+                "summary": summary,
+            }
+
+        return None
+
+    def _extract_active_line(self, soup: BeautifulSoup, available_lines: list[float]) -> float | None:
+        active = soup.select_one(".bestOddsComparison .oddsComparison__activeSubLi")
+        active_line = _safe_float(active.get_text(" ", strip=True)) if active else None
+        if active_line is not None:
+            return active_line
+        return available_lines[0] if available_lines else None
+
+    def _parse_1x2_rows(self, table: Any) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for row in table.select("tr[data-bid]"):
+            cells = row.find_all("td", recursive=False)
+            if len(cells) < 7:
+                continue
+            name = _extract_betexplorer_bookmaker_name(cells[0])
+            if not _is_supported_scrape_bookmaker(name):
+                continue
+
+            home = _safe_float(cells[4].get("data-odd"))
+            draw = _safe_float(cells[5].get("data-odd"))
+            away = _safe_float(cells[6].get("data-odd"))
+            if home is None or draw is None or away is None:
+                continue
+
+            rows.append(
+                {
+                    "name": name or "Bookmaker",
+                    "home": round(home, 3),
+                    "draw": round(draw, 3),
+                    "away": round(away, 3),
+                }
+            )
+        return rows
+
+    def _parse_two_way_rows(self, table: Any, left_key: str, right_key: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        table_line = _safe_float(table.get("data-handicap"))
+        for row in table.select("tr[data-bid]"):
+            cells = row.find_all("td", recursive=False)
+            if len(cells) < 7:
+                continue
+            name = _extract_betexplorer_bookmaker_name(cells[0])
+            if not _is_supported_scrape_bookmaker(name):
+                continue
+
+            line = _safe_float(cells[4].get_text(" ", strip=True))
+            left_price = _safe_float(cells[5].get("data-odd"))
+            right_price = _safe_float(cells[6].get("data-odd"))
+            if left_price is None or right_price is None:
+                continue
+
+            rows.append(
+                {
+                    "name": name or "Bookmaker",
+                    "line": round(line if line is not None else table_line or 0.0, 2),
+                    left_key: round(left_price, 3),
+                    right_key: round(right_price, 3),
+                }
+            )
+        return rows
+
+    def _merge_comparison_markets(self, quote: MarketQuote, markets: dict[str, Any]) -> MarketQuote:
+        match_winner = markets.get("match_winner") or {}
+        bookmakers = list(match_winner.get("rows") or quote.extra.get("bookmakers") or [])
+        runners = quote.runners
+
+        if bookmakers:
+            runners = [
+                _runner_from_bookmakers(1, quote.home_name, "home", bookmakers),
+                _runner_from_bookmakers(2, "Draw", "draw", bookmakers),
+                _runner_from_bookmakers(3, quote.away_name, "away", bookmakers),
+            ]
+
+        overround = round(sum((1 / runner.price) for runner in runners if runner.price), 4)
+        merged_extra = {
+            **quote.extra,
+            "bookmaker_count": len(bookmakers) or int(quote.extra.get("bookmaker_count") or 0),
+            "bookmakers": bookmakers[:12],
+            "overround": overround,
+            "favorite_name": _favorite_name(runners),
+            "related_markets": {
+                "match_winner": {
+                    "market_type": "match_winner",
+                    "active_line": 0.0,
+                    "available_lines": [0.0],
+                    "line_count": 1,
+                    "bookmaker_count": len(bookmakers),
+                    "rows": bookmakers[:12],
+                    "summary": _aggregate_match_winner_rows(bookmakers) if bookmakers else {},
+                },
+                **{name: value for name, value in markets.items() if name != "match_winner"},
+            },
+        }
+
+        return MarketQuote(
+            market_id=quote.market_id,
+            event_id=quote.event_id,
+            event_name=quote.event_name,
+            market_name=quote.market_name,
+            home_name=quote.home_name,
+            away_name=quote.away_name,
+            provider=quote.provider,
+            start_time=quote.start_time,
+            status=quote.status,
+            in_play=quote.in_play,
+            total_matched=float(len(bookmakers)) if bookmakers else quote.total_matched,
+            updated_at=quote.updated_at,
+            runners=runners,
+            extra=merged_extra,
+        )
 
     def _parse_listing_page(self, html: str, source_path: str) -> list[MarketQuote]:
         soup = BeautifulSoup(html, "lxml")
@@ -935,6 +1154,104 @@ def _favorite_name(runners: list[RunnerQuote]) -> str:
     if not candidates:
         return ""
     return min(candidates, key=lambda item: item.price or 999.0).name
+
+
+def _extract_available_lines(soup: BeautifulSoup) -> list[float]:
+    lines = {
+        value
+        for value in (
+            _safe_float(table.get("data-handicap")) for table in soup.select("table.table-main[data-handicap]")
+        )
+        if value is not None
+    }
+    return sorted(lines)
+
+
+def _extract_betexplorer_bookmaker_name(cell: Any) -> str:
+    if cell is None:
+        return ""
+    text = " ".join(cell.get_text(" ", strip=True).split())
+    return text
+
+
+def _is_supported_scrape_bookmaker(name: str) -> bool:
+    normalized = name.strip().lower()
+    if not normalized:
+        return False
+    return "betfair" not in normalized
+
+
+def _aggregate_match_winner_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {}
+
+    averages = {
+        "home": _round_mean([row["home"] for row in rows if row.get("home") is not None]),
+        "draw": _round_mean([row["draw"] for row in rows if row.get("draw") is not None]),
+        "away": _round_mean([row["away"] for row in rows if row.get("away") is not None]),
+    }
+    best_prices = {
+        "home": max((row["home"] for row in rows if row.get("home") is not None), default=None),
+        "draw": max((row["draw"] for row in rows if row.get("draw") is not None), default=None),
+        "away": max((row["away"] for row in rows if row.get("away") is not None), default=None),
+    }
+    favorite_side = min(
+        ("home", "draw", "away"),
+        key=lambda key: averages.get(key) if averages.get(key) is not None else 999.0,
+    )
+    return {
+        "favorite_side": favorite_side,
+        "avg_home": averages["home"],
+        "avg_draw": averages["draw"],
+        "avg_away": averages["away"],
+        "best_home": round(best_prices["home"], 3) if best_prices["home"] is not None else None,
+        "best_draw": round(best_prices["draw"], 3) if best_prices["draw"] is not None else None,
+        "best_away": round(best_prices["away"], 3) if best_prices["away"] is not None else None,
+    }
+
+
+def _aggregate_two_way_rows(rows: list[dict[str, Any]], left_key: str, right_key: str) -> dict[str, Any]:
+    if not rows:
+        return {}
+
+    left_values = [float(row[left_key]) for row in rows if row.get(left_key) is not None]
+    right_values = [float(row[right_key]) for row in rows if row.get(right_key) is not None]
+    if not left_values or not right_values:
+        return {}
+
+    avg_left = _round_mean(left_values)
+    avg_right = _round_mean(right_values)
+    left_prob = round(1 / avg_left, 4) if avg_left else 0.0
+    right_prob = round(1 / avg_right, 4) if avg_right else 0.0
+    lean = "balanced"
+    if avg_left and avg_right:
+        if avg_left + 0.03 < avg_right:
+            lean = left_key
+        elif avg_right + 0.03 < avg_left:
+            lean = right_key
+
+    return {
+        f"avg_{left_key}": avg_left,
+        f"avg_{right_key}": avg_right,
+        f"best_{left_key}": round(max(left_values), 3),
+        f"best_{right_key}": round(max(right_values), 3),
+        "lean": lean,
+        "lean_strength": round(abs(left_prob - right_prob), 4),
+    }
+
+
+def _handicap_favored_side(line: float) -> str:
+    if line < 0:
+        return "home"
+    if line > 0:
+        return "away"
+    return "balanced"
+
+
+def _round_mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(mean(values), 3)
 
 
 def _split_match_name(raw_value: str) -> tuple[str, str]:

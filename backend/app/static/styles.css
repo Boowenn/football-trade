@@ -342,6 +342,11 @@ select {
   gap: 12px;
 }
 
+.market-summary-grid {
+  display: grid;
+  gap: 12px;
+}
+
 .signal-card,
 .event-item {
   border-radius: 18px;
@@ -388,6 +393,94 @@ select {
   color: #ffd391;
 }
 
+.bookmaker-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.bookmaker-table th,
+.bookmaker-table td {
+  padding: 12px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.bookmaker-table th {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.market-summary-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(12, 24, 39, 0.8);
+}
+
+.market-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.market-summary-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.market-summary-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.market-summary-body {
+  display: grid;
+  gap: 8px;
+}
+
+.market-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.market-summary-row strong {
+  color: var(--text);
+}
+
+.market-mini-table {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.market-mini-head {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.market-mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 68px 68px 68px;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.market-mini-row span:first-child {
+  color: var(--text);
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -432,6 +525,15 @@ select {
 .monitor-empty {
   color: var(--muted);
   text-align: center;
+}
+
+.footer-note {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--muted);
 }
 
 @media (max-width: 1440px) {
