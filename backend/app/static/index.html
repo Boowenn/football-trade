@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>足球盘口建议台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260420d" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260420e" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
@@ -49,6 +49,10 @@
                             <div>
                                 <span>风险</span>
                                 <strong id="recommendationRisk">--</strong>
+                            </div>
+                            <div>
+                                <span>仓位</span>
+                                <strong id="recommendationStake">--</strong>
                             </div>
                         </div>
                         <ul id="recommendationReasons" class="reason-list"></ul>
@@ -138,6 +142,31 @@
                 </article>
             </section>
 
+            <section class="grid-two">
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>主推玩法</h3>
+                        <span>当前第一顺位</span>
+                    </div>
+                    <div id="primaryPlayPanel" class="decision-panel"></div>
+                </article>
+                <article class="panel">
+                    <div class="panel-head">
+                        <h3>建议仓位</h3>
+                        <span>固定仓位模型</span>
+                    </div>
+                    <div id="stakePlanPanel" class="decision-panel"></div>
+                </article>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <h3>为什么不用其它玩法</h3>
+                    <span>主推和备选的差异</span>
+                </div>
+                <div id="whyNotPanel" class="why-not-grid"></div>
+            </section>
+
             <section class="panel">
                 <div class="panel-head">
                     <h3>玩法分层</h3>
@@ -193,6 +222,6 @@
         </main>
     </div>
 
-    <script src="/static/app.js?v=20260420d"></script>
+    <script src="/static/app.js?v=20260420e"></script>
 </body>
 </html>

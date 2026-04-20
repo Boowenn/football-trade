@@ -22,6 +22,7 @@ def build_recommendation(snapshot: dict, history: Sequence[dict]) -> dict:
     use_history = bool(historical) and _history_has_actionable_signal(snapshot, historical, live_score)
 
     result_candidates, signals = _build_result_candidates(snapshot, historical if use_history else [], live_score)
+    match_profile = _build_match_profile(snapshot, result_candidates)
     play_candidates = _build_play_candidates(snapshot, result_candidates, live_score)
     play_candidates.sort(key=lambda item: item["score"], reverse=True)
     plays_payload = [_serialize_play(item) for item in play_candidates[:5]]
@@ -33,10 +34,14 @@ def build_recommendation(snapshot: dict, history: Sequence[dict]) -> dict:
             signals,
             ["当前盘口数据还不够完整，暂时无法给出玩法建议。"],
             plays_payload,
+            stake_plan=_build_stake_plan(None, "High"),
         )
 
     best = play_candidates[0]
     risk_level = _risk_level(snapshot, live_score)
+    primary_play = _serialize_play(best)
+    stake_plan = _build_stake_plan(best, risk_level)
+    why_not_others = _build_why_not_others(best, play_candidates[1:5], match_profile, risk_level)
 
     if best["score"] >= 66:
         recommendation = best["full_label"]
@@ -62,6 +67,9 @@ def build_recommendation(snapshot: dict, history: Sequence[dict]) -> dict:
             ]
             + best["reasons"][:3],
             plays_payload,
+            primary_play=primary_play,
+            stake_plan=stake_plan,
+            why_not_others=why_not_others,
         )
 
     return {
@@ -78,6 +86,9 @@ def build_recommendation(snapshot: dict, history: Sequence[dict]) -> dict:
         "generated_at": now,
         "signals": signals,
         "plays": plays_payload,
+        "primary_play": primary_play,
+        "stake_plan": stake_plan,
+        "why_not_others": why_not_others,
     }
 
 
@@ -627,6 +638,141 @@ def _serialize_play(play: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_stake_plan(primary_play: dict[str, Any] | None, risk_level: str) -> dict[str, Any]:
+    if not primary_play or float(primary_play.get("score") or 0.0) < 54.0:
+        return {
+            "level": "放弃",
+            "units": 0.0,
+            "max_bankroll_pct": 0.0,
+            "summary": "放弃，继续观察盘口。",
+            "reason": "当前优势还没达到可执行阈值，不建议强行下注。",
+        }
+
+    score = float(primary_play.get("score") or 0.0)
+    price = float(primary_play.get("price") or 0.0)
+
+    base_units = 0.45 if score < 62 else 0.75 if score < 74 else 1.0 if score < 84 else 1.2
+    risk_factor = {"Low": 1.0, "Medium": 0.85, "High": 0.65}.get(risk_level, 0.75)
+
+    price_factor = 1.0
+    price_reason = "赔率处在正常执行区间。"
+    if 1.45 <= price <= 2.35:
+        price_factor = 1.05
+        price_reason = "赔率落在主执行区间，收益和容错更平衡。"
+    elif 0 < price <= 1.20:
+        price_factor = 0.75
+        price_reason = "赔率偏薄，即使方向正确，收益弹性也有限。"
+    elif price >= 3.40:
+        price_factor = 0.78
+        price_reason = "赔率偏高，兑现路径更窄，仓位需要收缩。"
+
+    units = round(_clamp(base_units * risk_factor * price_factor, 0.0, 1.5), 2)
+    bankroll_pct = round(units, 2)
+
+    if units <= 0.0:
+        level = "放弃"
+    elif units < 0.6:
+        level = "试探仓"
+    elif units < 1.0:
+        level = "标准仓"
+    else:
+        level = "进取仓"
+
+    risk_reason = {
+        "Low": "整体盘口分歧不大，可以按正常仓位执行。",
+        "Medium": "盘口仍有一些波动，仓位按中性折扣处理。",
+        "High": "当前波动和分歧都偏大，只保留压缩后的仓位。",
+    }.get(risk_level, "风险状态不明，先按保守仓位处理。")
+
+    return {
+        "level": level,
+        "units": units,
+        "max_bankroll_pct": bankroll_pct,
+        "summary": f"{level} {units:.2f}u，单场上限 {bankroll_pct:.2f}% 资金。",
+        "reason": f"评分 {score:.0f} 分，{risk_reason}{price_reason}",
+    }
+
+
+def _build_why_not_others(
+    best: dict[str, Any],
+    alternatives: Sequence[dict[str, Any]],
+    match_profile: dict[str, Any],
+    risk_level: str,
+) -> list[dict[str, Any]]:
+    rows = []
+    for alternative in alternatives[:4]:
+        rows.append(
+            {
+                "market_key": alternative["market_key"],
+                "market_label": alternative["market_label"],
+                "full_label": alternative["full_label"],
+                "selection_name": alternative["selection_name"],
+                "price": round(float(alternative["price"]), 3),
+                "score": round(float(alternative["score"]), 2),
+                "score_gap": round(float(best["score"]) - float(alternative["score"]), 2),
+                "reason": _why_not_reason(best, alternative, match_profile, risk_level),
+            }
+        )
+    return rows
+
+
+def _why_not_reason(
+    best: dict[str, Any],
+    alternative: dict[str, Any],
+    match_profile: dict[str, Any],
+    risk_level: str,
+) -> str:
+    score_gap = round(float(best["score"]) - float(alternative["score"]), 2)
+    alt_market = alternative["market_key"]
+    best_market = best["market_key"]
+    alt_price = float(alternative.get("price") or 0.0)
+    best_price = float(best.get("price") or 0.0)
+
+    if alt_price <= 1.14:
+        return f"赔率只有 {alt_price:.2f}，保护是有了，但回报太薄，不值得排在主推前面。"
+
+    if alt_market == best_market:
+        if alt_price < best_price:
+            return f"同属 {alternative['market_label']}，但赔率只有 {alt_price:.2f}，性价比不如主推。"
+        return f"同属 {alternative['market_label']}，综合评分比主推低 {score_gap:.0f} 分，优先级自然后移。"
+
+    if alt_market in {"double_chance", "draw_no_bet"} and best_market not in {"double_chance", "draw_no_bet"}:
+        return f"保护性更强，但赔率被压到 {alt_price:.2f}，为当前这点不确定性牺牲了太多回报。"
+
+    if best_market in {"double_chance", "draw_no_bet"} and alt_market == "match_winner":
+        return "赔率会更高，但当前平局风险还没被吃掉，直接走胜平负的波动大于主推。"
+
+    if alt_market == "match_winner":
+        if match_profile["draw_risk"] >= 5 and best_market != "match_winner":
+            return "直胜回报更直接，但这场平局风险偏高，主推更重视防平和容错。"
+        if alt_price <= 1.35:
+            return f"赔率 {alt_price:.2f} 偏薄，哪怕方向没错，单位风险回报也弱于主推。"
+        return f"赛果侧方向没错，但综合评分仍比主推低 {score_gap:.0f} 分。"
+
+    if alt_market == "asian_handicap":
+        if match_profile["volatility"] >= 7:
+            return "让球玩法要同时满足赢球幅度，这场波动偏大，兑现条件比主推更苛刻。"
+        if abs(float(match_profile.get("ah_line") or 0.0)) >= 1.0:
+            return "让步已经不浅，需要净胜幅度配合，容错不如主推。"
+        return "亚盘方向是对的，但让球兑现路径更窄，综合容错还是主推更好。"
+
+    if alt_market == "over_under":
+        if best_market != "over_under":
+            return "总进球有倾向，但强度没有主推这条线那么集中，只能排在第二梯队。"
+        return f"同样是大小球，但当前这条线评分比主推低 {score_gap:.0f} 分。"
+
+    if alt_market == "both_teams_to_score":
+        return "BTTS 需要两队的进球路径同时兑现，前提条件比主推更多，容错更低。"
+
+    if alt_price >= 3.40:
+        return f"赔率虽然更高，但命中路径更窄，波动会明显大于主推。"
+
+    if risk_level == "High":
+        return f"当前整体风险本来就偏高，这个玩法比主推少了 {score_gap:.0f} 分，不值得放到第一顺位。"
+
+    return f"综合评分比主推低 {score_gap:.0f} 分，赔率和容错的平衡都不如主推。"
+
+
 def _build_result_reasons(
     side_key: str,
     current_price: float,
@@ -911,6 +1057,9 @@ def _empty_recommendation(
     signals: list[dict],
     reasons: list[str],
     plays: list[dict],
+    primary_play: dict[str, Any] | None = None,
+    stake_plan: dict[str, Any] | None = None,
+    why_not_others: list[dict[str, Any]] | None = None,
 ) -> dict:
     return {
         "market_id": market_id,
@@ -926,6 +1075,9 @@ def _empty_recommendation(
         "generated_at": now,
         "signals": signals,
         "plays": plays,
+        "primary_play": primary_play,
+        "stake_plan": stake_plan or _build_stake_plan(None, "High"),
+        "why_not_others": why_not_others or [],
     }
 
 

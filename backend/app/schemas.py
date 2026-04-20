@@ -52,6 +52,10 @@ class RecommendationPayload(BaseModel):
     breakdown: dict[str, float] = Field(default_factory=dict)
     signal: str = "neutral"
     generated_at: datetime
+    plays: list[dict[str, Any]] = Field(default_factory=list)
+    primary_play: dict[str, Any] | None = None
+    stake_plan: dict[str, Any] = Field(default_factory=dict)
+    why_not_others: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MarketSnapshot(BaseModel):

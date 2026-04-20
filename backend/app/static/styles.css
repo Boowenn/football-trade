@@ -242,6 +242,7 @@ select {
 
 .recommendation-metrics {
   margin: 20px 0 14px;
+  flex-wrap: wrap;
 }
 
 .recommendation-metrics span {
@@ -260,6 +261,10 @@ select {
   padding-left: 18px;
   display: grid;
   gap: 8px;
+}
+
+.reason-list.compact {
+  gap: 6px;
 }
 
 .scoreboard-main {
@@ -345,6 +350,10 @@ select {
 .market-summary-grid {
   display: grid;
   gap: 12px;
+}
+
+.decision-panel {
+  min-height: 252px;
 }
 
 .play-list-grid {
@@ -564,6 +573,141 @@ select {
   gap: 6px;
 }
 
+.primary-play-card,
+.stake-plan-card,
+.why-not-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(12, 24, 39, 0.82);
+}
+
+.primary-play-card,
+.stake-plan-card {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.primary-play-card {
+  background: linear-gradient(180deg, rgba(31, 24, 11, 0.48), rgba(12, 24, 39, 0.88));
+  border-color: rgba(255, 184, 77, 0.28);
+}
+
+.primary-play-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.primary-play-title {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.primary-play-sub,
+.stake-plan-summary,
+.stake-plan-reason,
+.why-not-meta,
+.why-not-card p {
+  color: var(--muted);
+}
+
+.primary-play-sub {
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.primary-play-metrics,
+.stake-plan-grid,
+.why-not-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.stake-plan-card.active {
+  border-color: rgba(64, 232, 154, 0.24);
+}
+
+.stake-plan-card.inactive {
+  border-color: rgba(255, 113, 104, 0.24);
+}
+
+.stake-plan-level {
+  font-size: 30px;
+  font-weight: 800;
+  color: #ffd391;
+}
+
+.stake-chip {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.stake-chip span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.stake-chip strong {
+  display: block;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.stake-plan-reason {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.why-not-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.why-not-card {
+  padding: 16px;
+}
+
+.why-not-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.why-not-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.why-not-meta {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.why-not-badge {
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(77, 166, 255, 0.12);
+  color: #89c7ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.why-not-card p {
+  margin: 0;
+  line-height: 1.6;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -624,6 +768,7 @@ select {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .why-not-grid,
   .play-list-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -647,7 +792,8 @@ select {
 @media (max-width: 960px) {
   .grid-two,
   .metrics-grid,
-  .scoreboard-main {
+  .scoreboard-main,
+  .why-not-grid {
     grid-template-columns: 1fr;
   }
 

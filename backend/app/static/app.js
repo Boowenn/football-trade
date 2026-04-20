@@ -72,6 +72,7 @@ const elements = {
   recommendationSelection: document.getElementById("recommendationSelection"),
   recommendationScore: document.getElementById("recommendationScore"),
   recommendationRisk: document.getElementById("recommendationRisk"),
+  recommendationStake: document.getElementById("recommendationStake"),
   recommendationReasons: document.getElementById("recommendationReasons"),
   metricBookmakers: document.getElementById("metricBookmakers"),
   metricOverround: document.getElementById("metricOverround"),
@@ -84,6 +85,9 @@ const elements = {
   eventsPanel: document.getElementById("eventsPanel"),
   bookmakerPanel: document.getElementById("bookmakerPanel"),
   relatedMarketsPanel: document.getElementById("relatedMarketsPanel"),
+  primaryPlayPanel: document.getElementById("primaryPlayPanel"),
+  stakePlanPanel: document.getElementById("stakePlanPanel"),
+  whyNotPanel: document.getElementById("whyNotPanel"),
   playListPanel: document.getElementById("playListPanel"),
   monitorTableBody: document.getElementById("monitorTableBody"),
   oddsCaption: document.getElementById("oddsCaption"),
@@ -361,6 +365,7 @@ function renderEmptyDashboard() {
   elements.recommendationSelection.textContent = "尚未选出方向";
   elements.recommendationScore.textContent = "--";
   elements.recommendationRisk.textContent = "--";
+  elements.recommendationStake.textContent = "--";
   elements.recommendationReasons.innerHTML = `<li>${escapeHtml(systemMessage)}</li>`;
 
   elements.metricBookmakers.textContent = "--";
@@ -375,6 +380,9 @@ function renderEmptyDashboard() {
   elements.eventsPanel.innerHTML = '<div class="empty-block">暂无比赛事件。</div>';
   elements.bookmakerPanel.innerHTML = '<div class="empty-block">暂无博彩公司报价。</div>';
   elements.relatedMarketsPanel.innerHTML = '<div class="empty-block">暂无亚盘和大小球数据。</div>';
+  elements.primaryPlayPanel.innerHTML = '<div class="empty-block">当前没有主推玩法。</div>';
+  elements.stakePlanPanel.innerHTML = '<div class="empty-block">当前没有可执行仓位。</div>';
+  elements.whyNotPanel.innerHTML = '<div class="empty-block">当前没有可展示的备选对比。</div>';
   elements.playListPanel.innerHTML = '<div class="empty-block">暂无玩法建议。</div>';
   elements.oddsCaption.textContent = "等待数据";
   elements.probabilityCaption.textContent = "等待数据";
@@ -446,6 +454,8 @@ function renderSnapshot(snapshot, timeseries) {
   const liveScore = getLiveScore(snapshot);
   const extra = snapshot.extra || {};
   const primaryRunner = snapshot.runners?.[0] || {};
+  const primaryPlay = recommendation.primary_play || recommendation.plays?.[0] || null;
+  const stakePlan = recommendation.stake_plan || {};
 
   elements.marketStatus.textContent = snapshot.in_play ? "滚球盘口" : "赛前盘口";
   elements.eventTitle.textContent = snapshot.event_name || "--";
@@ -460,12 +470,13 @@ function renderSnapshot(snapshot, timeseries) {
   elements.scoreMinute.textContent = liveScore.minute_label || "--";
   elements.scoreCards.textContent = formatCards(liveScore);
 
-  elements.recommendationAction.textContent = recommendation.recommendation || "不下注";
-  elements.recommendationSelection.textContent = recommendation.selection_name
-    ? `${recommendation.market_label || "玩法"} | ${recommendation.selection_name}`
+  elements.recommendationAction.textContent = primaryPlay?.full_label || recommendation.recommendation || "不下注";
+  elements.recommendationSelection.textContent = primaryPlay
+    ? `${primaryPlay.market_label || "玩法"} | ${primaryPlay.selection_name || primaryPlay.label || "--"}`
     : recommendation.market_label || "暂无明确方向";
   elements.recommendationScore.textContent = Math.round(recommendation.score || 0);
   elements.recommendationRisk.textContent = localizeRisk(recommendation.risk_level);
+  elements.recommendationStake.textContent = stakePlan.level || "--";
   elements.recommendationReasons.innerHTML = (recommendation.reasons || [])
     .map((reason) => `<li>${escapeHtml(reason)}</li>`)
     .join("");
@@ -482,6 +493,9 @@ function renderSnapshot(snapshot, timeseries) {
   renderEvents(liveScore.events || []);
   renderBookmakers(extra.bookmakers || []);
   renderRelatedMarkets(extra.related_markets || {});
+  renderPrimaryPlay(primaryPlay, recommendation);
+  renderStakePlan(stakePlan, primaryPlay);
+  renderWhyNot(recommendation.why_not_others || []);
   renderPlayList(recommendation.plays || []);
   renderOddsChart(snapshot, timeseries);
   renderProbabilityChart(snapshot, timeseries);
@@ -778,6 +792,103 @@ function renderPlayList(plays) {
         </ul>
       </article>
     `)
+    .join("");
+}
+
+function renderPrimaryPlay(primaryPlay, recommendation) {
+  if (!primaryPlay) {
+    elements.primaryPlayPanel.innerHTML = '<div class="empty-block">当前没有达到可执行阈值的主推玩法。</div>';
+    return;
+  }
+
+  const heading = Number(recommendation.score || 0) >= 54 ? "第一顺位" : "观察名单";
+  elements.primaryPlayPanel.innerHTML = `
+    <article class="primary-play-card">
+      <div class="primary-play-head">
+        <div>
+          <div class="play-card-rank">${escapeHtml(heading)}</div>
+          <div class="primary-play-title">${escapeHtml(primaryPlay.full_label || "--")}</div>
+          <div class="primary-play-sub">${escapeHtml(primaryPlay.selection_name || primaryPlay.label || "--")}</div>
+        </div>
+        <div class="play-card-score">
+          <strong>${escapeHtml(String(Math.round(primaryPlay.score || 0)))}</strong>
+          <span>${escapeHtml(primaryPlay.confidence_label || "--")}</span>
+        </div>
+      </div>
+      <div class="primary-play-metrics">
+        <div class="play-card-row">
+          <span>赔率</span>
+          <strong>${escapeHtml(primaryPlay.price != null ? Number(primaryPlay.price).toFixed(2) : "--")}</strong>
+        </div>
+        <div class="play-card-row">
+          <span>信号</span>
+          <strong>${escapeHtml(localizeSignal(primaryPlay.signal))}</strong>
+        </div>
+        <div class="play-card-row">
+          <span>玩法</span>
+          <strong>${escapeHtml(primaryPlay.market_label || "--")}</strong>
+        </div>
+      </div>
+      <ul class="reason-list compact">
+        ${(primaryPlay.reasons || [])
+          .slice(0, 3)
+          .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+          .join("")}
+      </ul>
+    </article>
+  `;
+}
+
+function renderStakePlan(stakePlan, primaryPlay) {
+  if (!stakePlan || !stakePlan.level) {
+    elements.stakePlanPanel.innerHTML = '<div class="empty-block">当前没有可执行仓位。</div>';
+    return;
+  }
+
+  elements.stakePlanPanel.innerHTML = `
+    <article class="stake-plan-card ${stakePlan.units > 0 ? "active" : "inactive"}">
+      <div class="stake-plan-level">${escapeHtml(stakePlan.level || "--")}</div>
+      <div class="stake-plan-summary">${escapeHtml(stakePlan.summary || "--")}</div>
+      <div class="stake-plan-grid">
+        <div class="stake-chip">
+          <span>主推</span>
+          <strong>${escapeHtml(primaryPlay?.full_label || "不下注")}</strong>
+        </div>
+        <div class="stake-chip">
+          <span>单位</span>
+          <strong>${escapeHtml(stakePlan.units != null ? `${Number(stakePlan.units).toFixed(2)}u` : "--")}</strong>
+        </div>
+        <div class="stake-chip">
+          <span>资金上限</span>
+          <strong>${escapeHtml(stakePlan.max_bankroll_pct != null ? `${Number(stakePlan.max_bankroll_pct).toFixed(2)}%` : "--")}</strong>
+        </div>
+      </div>
+      <p class="stake-plan-reason">${escapeHtml(stakePlan.reason || "")}</p>
+    </article>
+  `;
+}
+
+function renderWhyNot(items) {
+  if (!items.length) {
+    elements.whyNotPanel.innerHTML = '<div class="empty-block">当前没有需要对比的其它玩法。</div>';
+    return;
+  }
+
+  elements.whyNotPanel.innerHTML = items
+    .map(
+      (item) => `
+        <article class="why-not-card">
+          <div class="why-not-top">
+            <div>
+              <div class="why-not-title">${escapeHtml(item.full_label || "--")}</div>
+              <div class="why-not-meta">${escapeHtml(`赔率 ${formatPrice(item.price)} | 评分 ${Math.round(item.score || 0)} | 低 ${Math.round(item.score_gap || 0)} 分`)}</div>
+            </div>
+            <div class="why-not-badge">${escapeHtml(item.market_label || "--")}</div>
+          </div>
+          <p>${escapeHtml(item.reason || "")}</p>
+        </article>
+      `,
+    )
     .join("");
 }
 
